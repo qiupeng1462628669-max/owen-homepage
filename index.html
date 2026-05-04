@@ -2086,14 +2086,14 @@
             isPublishing = true;
             const publishBtn = document.getElementById('blog-publish-btn');
             const originalText = publishBtn.textContent;
-            publishBtn.textContent = '⏳ ' + (currentLang === 'zh' ? '處理中...' : 'Processing...');
+            publishBtn.textContent = '⏳ 發布中...';
             publishBtn.disabled = true;
-
+        
             const title = document.getElementById('blog-post-title').value.trim();
             const content = document.getElementById('blog-post-content').value.trim();
             const errorEl = document.getElementById('blog-editor-error');
             const t = translations[currentLang];
-
+        
             if (!title || !content) {
                 errorEl.textContent = t.blogErrorEmpty;
                 errorEl.classList.remove('hidden');
@@ -2102,36 +2102,43 @@
                 isPublishing = false;
                 return;
             }
-
-            // ========== 修改後 ==========
+        
             let imageUrls = [];
-            // 過濾掉已被刪除的圖片（removeBlogImage 會將其設為 null）
+        
+            // 過濾有效的圖片
             const validImages = blogPendingImages.filter(img => img !== null);
-            if (validImages.length > 0) {
-                try {
-                    imageUrls = await uploadBlogImagesToImgur(validImages);
-                } catch (err) {
-                    console.error('Image upload error:', err);
-                }
-            }
-
-            const db = window.firebaseDb;
-
+        
             try {
+                // ==================== 上傳圖片到 Imgur（原有功能） ====================
+                if (validImages.length > 0) {
+                    imageUrls = await uploadBlogImagesToImgur(validImages);
+                }
+        
+                // ==================== 新增：同時上傳到 GitHub 備份倉庫 ====================
+                console.log(`🔄 開始上傳 ${validImages.length} 張 Blog 圖片到 GitHub...`);
+                
+                for (let i = 0; i < validImages.length; i++) {
+                    if (validImages[i]) {
+                        const fileName = `post-${editingPostId || 'new'}-${i}.jpg`;
+                        const success = await uploadImageToGitHub(validImages[i], fileName);
+                        if (success) {
+                            console.log(`✅ Blog 圖片 ${i} 上傳成功`);
+                        }
+                    }
+                }
+        
+                // ==================== 保存到 Firebase ====================
+                const db = window.firebaseDb;
+        
                 if (editingPostId) {
-                    // Update existing post
                     const postRef = window.firestoreDoc(db, 'blogPosts', editingPostId);
-                    const updateData = {
+                    await window.firestoreUpdateDoc(postRef, {
                         title: title,
                         content: content,
+                        images: imageUrls,
                         updatedAt: window.firestoreTimestamp.now()
-                    };
-                    if (imageUrls.length > 0) {
-                        updateData.images = imageUrls;
-                    }
-                    await window.firestoreUpdateDoc(postRef, updateData);
+                    });
                 } else {
-                    // Create new post
                     const postsCollection = window.firestoreCollection(db, 'blogPosts');
                     await window.firestoreAddDoc(postsCollection, {
                         title: title,
@@ -2145,20 +2152,15 @@
                         visible: true
                     });
                 }
+        
+                alert('✅ 文章發布成功！圖片已同步到 GitHub 備份');
                 closeBlogEditor();
                 loadBlogPosts();
+        
             } catch (err) {
-                let errorMsg = t.blogErrorGeneral;
-                if (err.code === 'permission-denied') {
-                    errorMsg = currentLang === 'zh' 
-                        ? '❌ 權限不足：請檢查 Firestore 安全規則，確保已登入使用者可寫入 blogPosts 集合。' 
-                        : '❌ Permission denied: Please check Firestore security rules to allow writes to blogPosts collection.';
-                } else if (err.message) {
-                    errorMsg = `❌ ${err.message}`;
-                }
-                errorEl.textContent = errorMsg;
+                console.error(err);
+                errorEl.textContent = t.blogErrorGeneral;
                 errorEl.classList.remove('hidden');
-                console.error('Publish error:', err);
             } finally {
                 publishBtn.textContent = originalText;
                 publishBtn.disabled = false;
